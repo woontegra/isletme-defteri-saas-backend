@@ -27,7 +27,7 @@ ALTER TABLE "users" ALTER COLUMN "eposta" SET NOT NULL;
 ALTER TABLE "users" ALTER COLUMN "rol" SET NOT NULL;
 
 -- Drop old columns and enum
-ALTER TABLE "users" DROP CONSTRAINT "users_tenantId_email_key";
+DROP INDEX IF EXISTS "users_tenantId_email_key";
 ALTER TABLE "users" DROP COLUMN "name";
 ALTER TABLE "users" DROP COLUMN "email";
 ALTER TABLE "users" DROP COLUMN "role";

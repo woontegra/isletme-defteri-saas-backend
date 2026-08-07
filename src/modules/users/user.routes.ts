@@ -15,8 +15,9 @@ export const userRouter = Router();
 
 userRouter.use(authMiddleware, tenantMiddleware);
 
-const viewRoles = requireRole(["BURO_SAHIBI", "AVUKAT_YONETICI"]);
-const manageRoles = requireRole(["BURO_SAHIBI"]);
+const viewRoles = requireRole(["SIRKET_SAHIBI", "YONETICI"]);
+const editRoles = requireRole(["SIRKET_SAHIBI", "YONETICI"]);
+const manageRoles = requireRole(["SIRKET_SAHIBI"]);
 
 function paramId(req: Request): string {
   const id = req.params.id;
@@ -68,7 +69,7 @@ userRouter.post("/", manageRoles, async (req: Request, res: Response, next: Next
   }
 });
 
-userRouter.patch("/:id", manageRoles, async (req: Request, res: Response, next: NextFunction) => {
+userRouter.patch("/:id", editRoles, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = await updateUser(getTenantId(req), req.auth!, paramId(req), req.body);
     res.json(user);

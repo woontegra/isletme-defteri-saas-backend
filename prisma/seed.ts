@@ -3,8 +3,13 @@ import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
+const ADMIN_EMAIL = "info@woontegra.com";
+const LEGACY_ADMIN_EMAIL = "admin@woontegra.local";
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "Admin12345!";
+
 async function main() {
-  const passwordHash = await bcrypt.hash("Admin12345!", 12);
+  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
 
   const tenant = await prisma.tenant.upsert({
     where: { slug: "woontegra" },
@@ -16,29 +21,45 @@ async function main() {
     },
   });
 
+  // Eski seed e-postasını yeni adrese taşı (mevcut kurulumlar için)
+  await prisma.user.updateMany({
+    where: {
+      tenantId: tenant.id,
+      kullaniciAdi: ADMIN_USERNAME,
+      eposta: LEGACY_ADMIN_EMAIL,
+    },
+    data: { eposta: ADMIN_EMAIL },
+  });
+
   await prisma.user.upsert({
     where: {
-      tenantId_eposta: {
+      tenantId_kullaniciAdi: {
         tenantId: tenant.id,
-        eposta: "admin@woontegra.local",
+        kullaniciAdi: ADMIN_USERNAME,
       },
     },
-    update: {},
+    update: {
+      passwordHash,
+      eposta: ADMIN_EMAIL,
+      adSoyad: "Serdar Topal",
+      rol: UserRole.SIRKET_SAHIBI,
+      aktifMi: true,
+    },
     create: {
       tenantId: tenant.id,
       adSoyad: "Serdar Topal",
-      kullaniciAdi: "admin",
-      eposta: "admin@woontegra.local",
+      kullaniciAdi: ADMIN_USERNAME,
+      eposta: ADMIN_EMAIL,
       telefon: null,
       passwordHash,
-      rol: UserRole.BURO_SAHIBI,
+      rol: UserRole.SIRKET_SAHIBI,
       aktifMi: true,
     },
   });
 
   console.log("Seed tamamlandı.");
   console.log("Tenant:", tenant.name);
-  console.log("Kullanıcı: admin@woontegra.local / Admin12345! (BURO_SAHIBI)");
+  console.log(`Kullanıcı: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD} (SIRKET_SAHIBI)`);
 }
 
 main()

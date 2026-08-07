@@ -13,9 +13,65 @@ enum TenantStatus {
 }
 
 enum UserRole {
-  BURO_SAHIBI
-  AVUKAT_YONETICI
-  KATIP_PERSONEL
+  SIRKET_SAHIBI
+  YONETICI
+  PERSONEL
+  GORUNTULEYICI
+}
+
+enum IncomeCollectionStatus {
+  TAHSIL_EDILDI
+  BEKLIYOR
+}
+
+enum IncomeSaleType {
+  YAZILIM_ABONELIK
+  YAZILIM_LISANS
+  HIZMET
+  DANISMANLIK
+  EGITIM
+  DIGER
+}
+
+enum ExpensePaymentStatus {
+  ODENDI
+  BEKLIYOR
+}
+
+enum DebtRecordType {
+  BORC
+  ALACAK
+}
+
+enum DebtRecordStatus {
+  ACIK
+  KAPANDI
+  IPTAL
+}
+
+enum SubscriptionBillingCycle {
+  AYLIK
+  YILLIK
+  OZEL
+}
+
+enum SubscriptionStatus {
+  AKTIF
+  DURAKLATILDI
+  IPTAL
+}
+
+enum PartnerCapitalTransactionType {
+  ANA_SERMAYE_ODEMESI
+  PARA_KOYMA
+  PARA_CEKME
+}
+
+enum CompanyAccountType {
+  BANKA
+  KASA
+  POS
+  DIGER
 }
 
 model Tenant {
@@ -26,8 +82,43 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
   users     User[]
+  incomes   IncomeRecord[]
+  expenses  ExpenseRecord[]
+  debts     DebtRecord[]
+  subscriptions SubscriptionRecord[]
+  capitalSettings CapitalSettings?
+  capitalIncreases CapitalIncreaseRecord[]
+  capitalPartners CapitalPartner[]
+  partnerCapitalTransactions PartnerCapitalTransaction[]
+  tenantSettings TenantSettings?
+  companyAccounts CompanyAccount[]
 
   @@map("tenants")
+}
+
+model TenantSettings {
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  firmaUnvani           String?
+  vergiDairesi          String?
+  vergiNo               String?
+  mersisNo              String?
+  ticaretSicilNo        String?
+  telefon               String?
+  eposta                String?
+  website               String?
+  adres                 String?
+  sehir                 String?
+  ilce                  String?
+  postaKodu             String?
+  varsayilanParaBirimi  String   @default("TRY")
+  tarihFormati          String   @default("DD.MM.YYYY")
+  saatDilimi            String   @default("Europe/Istanbul")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_settings")
 }
 
 model User {
@@ -38,7 +129,7 @@ model User {
   eposta       String
   telefon      String?
   passwordHash String
-  rol          UserRole @default(KATIP_PERSONEL)
+  rol          UserRole @default(PERSONEL)
   aktifMi      Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -47,4 +138,176 @@ model User {
   @@unique([tenantId, eposta])
   @@unique([tenantId, kullaniciAdi])
   @@map("users")
+}
+
+model IncomeRecord {
+  id              String                 @id @default(cuid())
+  tenantId        String
+  tarih           DateTime
+  projeMarka      String?
+  urunHizmet      String?
+  musteri         String?
+  satisTuru       IncomeSaleType?
+  donemPaket      String?
+  aciklama        String?
+  tutar           Decimal                @db.Decimal(14, 2)
+  tahsilDurumu    IncomeCollectionStatus
+  faturaKesildiMi Boolean                @default(false)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tarih])
+  @@map("income_records")
+}
+
+model ExpenseRecord {
+  id              String               @id @default(cuid())
+  tenantId        String
+  tarih           DateTime
+  vadeTarihi      DateTime?
+  kategori        String
+  projeMarka      String?
+  firmaTedarikci  String?
+  aciklama        String?
+  tutar           Decimal              @db.Decimal(14, 2)
+  kdvOrani        Decimal?             @db.Decimal(5, 2)
+  kdvDahilMi      Boolean              @default(false)
+  odemeDurumu     ExpensePaymentStatus
+  fisFaturaVarMi  Boolean              @default(false)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tarih])
+  @@map("expense_records")
+}
+
+model DebtRecord {
+  id          String           @id @default(cuid())
+  tenantId    String
+  tur         DebtRecordType
+  kisiFirma   String
+  projeMarka  String?
+  aciklama    String?
+  tutar       Decimal          @db.Decimal(14, 2)
+  vadeTarihi  DateTime?
+  durum       DebtRecordStatus
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, vadeTarihi])
+  @@map("debt_records")
+}
+
+model SubscriptionRecord {
+  id                    String                   @id @default(cuid())
+  tenantId              String
+  hizmetAdi             String
+  kategori              String
+  projeMarka            String?
+  faturaDonemi          SubscriptionBillingCycle
+  tutar                 Decimal                  @db.Decimal(14, 2)
+  sonrakiYenilemeTarihi DateTime?
+  durum                 SubscriptionStatus
+  not                   String?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  tenant                Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, sonrakiYenilemeTarihi])
+  @@map("subscription_records")
+}
+
+model CapitalSettings {
+  id                        String    @id @default(cuid())
+  tenantId                  String    @unique
+  sirketUnvani              String?
+  kurulusTarihi             DateTime?
+  ticaretSicilGazeteTarihi  DateTime?
+  anaSermaye                Decimal   @default(0) @db.Decimal(14, 2)
+  ortakParaCarpani          Decimal   @default(3) @db.Decimal(8, 2)
+  uyariOrani                Decimal   @default(0.8) @db.Decimal(5, 4)
+  sonSermayeArtirimTarihi   DateTime?
+  notlar                    String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  tenant                    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("capital_settings")
+}
+
+model CapitalIncreaseRecord {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tarih          DateTime
+  oncekiSermaye  Decimal? @db.Decimal(14, 2)
+  yeniSermaye    Decimal  @db.Decimal(14, 2)
+  aciklama       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, tarih])
+  @@map("capital_increase_records")
+}
+
+model CapitalPartner {
+  id        String   @id @default(cuid())
+  tenantId  String
+  adSoyad   String
+  unvan     String?
+  telefon   String?
+  eposta    String?
+  aktifMi   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions PartnerCapitalTransaction[]
+
+  @@index([tenantId, aktifMi])
+  @@map("capital_partners")
+}
+
+model CompanyAccount {
+  id           String             @id @default(cuid())
+  tenantId     String
+  hesapAdi     String
+  hesapTuru    CompanyAccountType
+  bankaAdi     String?
+  iban         String?
+  hesapNo      String?
+  paraBirimi   String             @default("TRY")
+  aciklama     String?
+  aktifMi      Boolean            @default(true)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  transactions PartnerCapitalTransaction[]
+
+  @@index([tenantId, aktifMi])
+  @@map("company_accounts")
+}
+
+model PartnerCapitalTransaction {
+  id               String                       @id @default(cuid())
+  tenantId         String
+  partnerId        String?
+  companyAccountId String?
+  tarih            DateTime
+  ortakAdi         String
+  tur              PartnerCapitalTransactionType
+  aciklama         String?
+  tutar            Decimal                      @db.Decimal(14, 2)
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+  tenant           Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  partner          CapitalPartner?              @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  companyAccount   CompanyAccount?              @relation(fields: [companyAccountId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, tarih])
+  @@index([tenantId, partnerId])
+  @@index([tenantId, companyAccountId])
+  @@map("partner_capital_transactions")
 }

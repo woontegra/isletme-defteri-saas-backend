@@ -18,3 +18,13 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+export function isCorsOriginAllowed(origin: string): boolean {
+  const allowedList = env.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowedList.includes(origin)) return true;
+  if (/^http:\/\/localhost:\d+$/.test(origin)) return true;
+  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return true;
+  // Woontegra canlı domainleri (https)
+  if (/^https:\/\/([\w-]+\.)?woontegra\.com$/.test(origin)) return true;
+  return false;
+}

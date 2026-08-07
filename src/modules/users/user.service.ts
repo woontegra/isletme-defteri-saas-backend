@@ -17,7 +17,7 @@ export const userSelect = {
   updatedAt: true,
 } as const;
 
-const assignableRoles = ["AVUKAT_YONETICI", "KATIP_PERSONEL"] as const;
+const assignableRoles = ["YONETICI", "PERSONEL", "GORUNTULEYICI"] as const;
 
 export const createUserSchema = z.object({
   adSoyad: z.string().trim().min(1, "Ad soyad gereklidir."),
@@ -43,9 +43,29 @@ export const resetPasswordSchema = z.object({
   yeniSifre: z.string().min(8, "Şifre en az 8 karakter olmalıdır."),
 });
 
-function assertBuroSahibi(actor: AuthContext) {
-  if (actor.rol !== "BURO_SAHIBI") {
-    throw new Error("Bu işlem yalnızca Büro Sahibi tarafından yapılabilir.");
+function assertSirketSahibi(actor: AuthContext) {
+  if (actor.rol !== "SIRKET_SAHIBI") {
+    throw new Error("Bu işlem yalnızca Şirket Sahibi tarafından yapılabilir.");
+  }
+}
+
+function assertCanEditUser(
+  actor: AuthContext,
+  target: { id: string; rol: UserRole },
+  parsed: z.infer<typeof updateUserSchema>
+) {
+  if (actor.rol === "SIRKET_SAHIBI") return;
+
+  if (actor.rol !== "YONETICI") {
+    throw new Error("Bu işlem için yetkiniz yok.");
+  }
+
+  if (target.rol === "SIRKET_SAHIBI") {
+    throw new Error("Şirket Sahibi hesabı düzenlenemez.");
+  }
+
+  if (parsed.aktifMi !== undefined) {
+    throw new Error("Kullanıcı durumu yalnızca Şirket Sahibi tarafından değiştirilebilir.");
   }
 }
 
@@ -55,11 +75,11 @@ async function findTenantUser(tenantId: string, userId: string) {
   });
 }
 
-async function countActiveBuroSahibi(tenantId: string, excludeUserId?: string) {
+async function countActiveSirketSahibi(tenantId: string, excludeUserId?: string) {
   return prisma.user.count({
     where: {
       tenantId,
-      rol: "BURO_SAHIBI",
+      rol: "SIRKET_SAHIBI",
       aktifMi: true,
       ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
     },
@@ -107,7 +127,7 @@ export async function createUser(
   actor: AuthContext,
   data: z.infer<typeof createUserSchema>
 ) {
-  assertBuroSahibi(actor);
+  assertSirketSahibi(actor);
   const parsed = createUserSchema.parse(data);
 
   const passwordHash = await hashPassword(parsed.sifre);
@@ -140,18 +160,24 @@ export async function updateUser(
   userId: string,
   data: z.infer<typeof updateUserSchema>
 ) {
-  assertBuroSahibi(actor);
   const parsed = updateUserSchema.parse(data);
   const target = await findTenantUser(tenantId, userId);
 
   if (!target) throw new Error("Kullanıcı bulunamadı.");
 
-  if (target.rol === "BURO_SAHIBI" && parsed.rol) {
-    throw new Error("Büro Sahibi rolü form üzerinden değiştirilemez.");
+  assertCanEditUser(actor, target, parsed);
+
+  if (target.rol === "SIRKET_SAHIBI" && parsed.rol) {
+    throw new Error("Şirket Sahibi rolü form üzerinden değiştirilemez.");
   }
 
   if (parsed.aktifMi === false) {
+    assertSirketSahibi(actor);
     await assertCanDeactivate(tenantId, actor, target);
+  }
+
+  if (parsed.aktifMi === true && actor.rol !== "SIRKET_SAHIBI") {
+    throw new Error("Kullanıcı durumu yalnızca Şirket Sahibi tarafından değiştirilebilir.");
   }
 
   const updateData: {
@@ -197,10 +223,10 @@ async function assertCanDeactivate(
     throw new Error("Kendi hesabınızı pasifleştiremezsiniz.");
   }
 
-  if (target.rol === "BURO_SAHIBI" && target.aktifMi) {
-    const others = await countActiveBuroSahibi(tenantId, target.id);
+  if (target.rol === "SIRKET_SAHIBI" && target.aktifMi) {
+    const others = await countActiveSirketSahibi(tenantId, target.id);
     if (others === 0) {
-      throw new Error("Son aktif Büro Sahibi pasifleştirilemez.");
+      throw new Error("Son aktif Şirket Sahibi pasifleştirilemez.");
     }
   }
 }
@@ -211,7 +237,7 @@ export async function resetUserPassword(
   userId: string,
   data: z.infer<typeof resetPasswordSchema>
 ) {
-  assertBuroSahibi(actor);
+  assertSirketSahibi(actor);
   const parsed = resetPasswordSchema.parse(data);
   const target = await findTenantUser(tenantId, userId);
   if (!target) throw new Error("Kullanıcı bulunamadı.");
@@ -232,7 +258,7 @@ export async function deactivateUser(
   actor: AuthContext,
   userId: string
 ) {
-  assertBuroSahibi(actor);
+  assertSirketSahibi(actor);
   const target = await findTenantUser(tenantId, userId);
   if (!target) throw new Error("Kullanıcı bulunamadı.");
 

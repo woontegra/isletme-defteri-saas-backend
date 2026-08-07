@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { env } from "./config/env";
+import { isCorsOriginAllowed } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import { authRouter } from "./modules/auth/auth.routes";
 import { tenantRouter } from "./modules/tenants/tenant.routes";
@@ -15,11 +15,7 @@ app.use(
         callback(null, true);
         return;
       }
-      const allowed =
-        origin === env.CORS_ORIGIN ||
-        /^http:\/\/localhost:\d+$/.test(origin) ||
-        /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
-      callback(null, allowed);
+      callback(null, isCorsOriginAllowed(origin));
     },
     credentials: true,
   })
