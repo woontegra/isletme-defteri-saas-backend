@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantStatus {
+  ACTIVE
+  PASSIVE
+}
+
+enum UserRole {
+  BURO_SAHIBI
+  AVUKAT_YONETICI
+  KATIP_PERSONEL
+}
+
+model Tenant {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  users     User[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  adSoyad      String
+  kullaniciAdi String
+  eposta       String
+  telefon      String?
+  passwordHash String
+  rol          UserRole @default(KATIP_PERSONEL)
+  aktifMi      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, eposta])
+  @@unique([tenantId, kullaniciAdi])
+  @@map("users")
+}
