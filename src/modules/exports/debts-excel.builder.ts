@@ -1,12 +1,12 @@
 import ExcelJS from "exceljs";
 import type { DebtRecord } from "@prisma/client";
 import { DEBT_STATUS_LABELS, DEBT_TYPE_LABELS } from "./export-labels";
-import { countWhere, groupBySum, sumAmount, sumWhere } from "./export-analytics";
+import { countWhere, sumWhere } from "./export-analytics";
 import {
-  addAnalysisTable,
   addDetailTable,
   addMetricTable,
   addProfessionalHeader,
+  addSectionTitle,
   setupWorksheetPrint,
 } from "./excel-report.helpers";
 import { exportFileDate, safeMoney } from "./format.utils";
@@ -30,7 +30,6 @@ export async function buildDebtsProfessionalExcel(options: {
   const { records, tenantName } = options;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Woontegra";
-  const sheet = workbook.addWorksheet("Borc Alacak");
 
   const openDebt = sumWhere(
     records,
@@ -46,67 +45,45 @@ export async function buildDebtsProfessionalExcel(options: {
   const cancelled = countWhere(records, (r) => r.durum === "IPTAL");
   const upcoming = countWhere(records, (r) => r.durum === "ACIK" && isUpcomingVade(r.vadeTarihi));
 
-  let row = addProfessionalHeader(sheet, {
+  const ozet = workbook.addWorksheet("Özet");
+  let row = addProfessionalHeader(ozet, {
     reportTitle: "Borç / Alacak Raporu",
     tenantName,
     recordCount: records.length,
   });
-
-  row = addMetricTable(sheet, row, [
+  row = addSectionTitle(ozet, row, "Rapor Özeti", 3);
+  addMetricTable(ozet, row, [
     { label: "Açık Borç", value: openDebt, money: true },
     { label: "Açık Alacak", value: openCredit, money: true },
     { label: "Net Durum", value: openCredit - openDebt, money: true, net: true },
+    { label: "Yaklaşan Vade", value: upcoming, desc: "30 gün içinde" },
     { label: "Kapalı Kayıt", value: closed, desc: "Adet" },
     { label: "İptal Kayıt", value: cancelled, desc: "Adet" },
-    { label: "Yaklaşan Vade", value: upcoming, desc: "30 gün içinde" },
     { label: "Kayıt Sayısı", value: records.length, desc: "Adet" },
   ]);
+  setupWorksheetPrint(ozet, ozet.rowCount, 3);
 
-  const typeRows = groupBySum(
-    records,
-    (r) => DEBT_TYPE_LABELS[r.tur] ?? r.tur,
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Tür Özeti", typeRows);
-
-  const statusRows = groupBySum(
-    records,
-    (r) => DEBT_STATUS_LABELS[r.durum] ?? r.durum,
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Durum Özeti", statusRows);
-
-  const upcomingRecords = records.filter((r) => r.durum === "ACIK" && isUpcomingVade(r.vadeTarihi));
-  const upcomingRows = upcomingRecords.map((r) => [
-    DEBT_TYPE_LABELS[r.tur] ?? r.tur,
-    formatExcelText(r.kisiFirma),
-    formatExcelDate(r.vadeTarihi),
-    safeMoney(r.tutar),
-    DEBT_STATUS_LABELS[r.durum] ?? r.durum,
-  ]);
-  row = addDetailTable(sheet, row, "Yaklaşan Vadeler (30 Gün)", {
-    headers: ["Tür", "Kişi / Firma", "Vade", "Tutar", "Durum"],
-    widths: [12, 24, 14, 14, 12],
-    moneyColumns: [4],
-    rows: upcomingRows,
+  const detay = workbook.addWorksheet("Borc Alacak Detaylari");
+  row = addProfessionalHeader(detay, {
+    reportTitle: "Borç / Alacak Detayları",
+    tenantName,
+    recordCount: records.length,
   });
-
-  row = addDetailTable(sheet, row, "Detay Borç / Alacak Listesi", {
-    headers: ["Tür", "Kişi / Firma", "Proje / Marka", "Açıklama", "Tutar", "Vade", "Durum"],
-    widths: [12, 22, 16, 28, 14, 12, 12],
+  addDetailTable(detay, row, "Borç / Alacak Detayları", {
+    headers: ["Tür", "Kişi / Firma", "Açıklama", "Vade", "Tutar", "Durum"],
+    widths: [12, 24, 32, 12, 14, 12],
     moneyColumns: [5],
     rows: records.map((r) => [
       DEBT_TYPE_LABELS[r.tur] ?? r.tur,
       formatExcelText(r.kisiFirma),
-      formatExcelText(r.projeMarka),
       formatExcelText(r.aciklama),
-      safeMoney(r.tutar),
       formatExcelDate(r.vadeTarihi),
+      safeMoney(r.tutar),
       DEBT_STATUS_LABELS[r.durum] ?? r.durum,
     ]),
   });
+  setupWorksheetPrint(detay, detay.rowCount, 6);
 
-  setupWorksheetPrint(sheet, sheet.rowCount, 7);
   return workbookToBuffer(workbook);
 }
 

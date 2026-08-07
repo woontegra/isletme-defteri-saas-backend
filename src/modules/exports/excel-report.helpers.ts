@@ -18,6 +18,7 @@ export interface MetricRow {
   value: string | number;
   desc?: string;
   money?: boolean;
+  percent?: boolean;
   net?: boolean;
 }
 
@@ -35,45 +36,42 @@ export interface DetailTableConfig {
   moneyColumns: number[];
 }
 
-const BRAND_FILL = "FF0F172A";
-const SECTION_FILL = "FFE2E8F0";
+const SECTION_FILL = "FFF0F0F0";
+const BORDER = "FF000000";
 
 export function addProfessionalHeader(
   sheet: ExcelJS.Worksheet,
   meta: ReportHeaderMeta,
   colSpan = 6
 ): number {
-  sheet.mergeCells(1, 1, 1, colSpan);
-  const brand = sheet.getCell(1, 1);
-  brand.value = "Woontegra İşletme Defteri";
-  brand.font = { bold: true, size: 18, color: { argb: "FFFFFFFF" } };
-  brand.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BRAND_FILL } };
-  brand.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+  sheet.mergeCells(1, 1, 1, Math.floor(colSpan / 2));
+  sheet.mergeCells(1, Math.floor(colSpan / 2) + 1, 1, colSpan);
+  const left = sheet.getCell(1, 1);
+  left.value = meta.tenantName;
+  left.font = { bold: true, size: 12, color: { argb: "FF000000" } };
+  left.alignment = { vertical: "top", horizontal: "left", wrapText: true };
+
+  const right = sheet.getCell(1, Math.floor(colSpan / 2) + 1);
+  right.value = meta.reportTitle.toUpperCase();
+  right.font = { bold: true, size: 12, color: { argb: "FF000000" } };
+  right.alignment = { vertical: "top", horizontal: "right", wrapText: true };
 
   sheet.mergeCells(2, 1, 2, colSpan);
-  const title = sheet.getCell(2, 1);
-  title.value = meta.reportTitle;
-  title.font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
-  title.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
-  title.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
-
-  const metaLines = [
-    `Şirket: ${meta.tenantName}`,
+  const metaParts = [
+    `Düzenleme tarihi: ${new Date().toLocaleDateString("tr-TR")}`,
     meta.periodLabel ? `Dönem: ${meta.periodLabel}` : null,
     meta.recordCount !== undefined ? `Kayıt Sayısı: ${meta.recordCount}` : null,
   ].filter(Boolean);
+  sheet.getCell(2, 1).value = metaParts.join("   |   ");
+  sheet.getCell(2, 1).font = { size: 9, color: { argb: "FF333333" } };
 
   sheet.mergeCells(3, 1, 3, colSpan);
-  sheet.getCell(3, 1).value = metaLines.join("   |   ");
-  sheet.getCell(3, 1).font = { size: 10, color: { argb: "FF475569" } };
-
-  sheet.mergeCells(4, 1, 4, colSpan);
-  sheet.getCell(4, 1).value = `Oluşturma: ${new Date().toLocaleString("tr-TR")}`;
-  sheet.getCell(4, 1).font = { italic: true, size: 9, color: { argb: "FF64748B" } };
+  sheet.getCell(3, 1).border = { bottom: { style: "medium", color: { argb: BORDER } } };
 
   sheet.getRow(1).height = 28;
-  sheet.getRow(2).height = 24;
-  return 6;
+  sheet.getRow(2).height = 18;
+  sheet.getRow(3).height = 6;
+  return 5;
 }
 
 export function addSectionTitle(
@@ -84,11 +82,67 @@ export function addSectionTitle(
 ): number {
   sheet.mergeCells(row, 1, row, colSpan);
   const cell = sheet.getCell(row, 1);
-  cell.value = title;
-  cell.font = { bold: true, size: 12, color: { argb: "FF0F172A" } };
+  cell.value = title.toUpperCase();
+  cell.font = { bold: true, size: 10, color: { argb: "FF000000" } };
   cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SECTION_FILL } };
-  cell.alignment = { vertical: "middle", indent: 1 };
-  sheet.getRow(row).height = 22;
+  cell.alignment = { vertical: "middle" };
+  cell.border = {
+    bottom: { style: "thin", color: { argb: BORDER } },
+  };
+  sheet.getRow(row).height = 20;
+  return row + 1;
+}
+
+export function addSummaryCardGrid(
+  sheet: ExcelJS.Worksheet,
+  startRow: number,
+  cards: Array<{ label: string; value: string | number; money?: boolean }>,
+  colSpan = 6
+): number {
+  let row = addSectionTitle(sheet, startRow, "Finansal Özet Kartları", colSpan);
+  const cardsPerRow = 3;
+  const cardWidth = Math.floor(colSpan / cardsPerRow);
+
+  for (let i = 0; i < cards.length; i += cardsPerRow) {
+    const chunk = cards.slice(i, i + cardsPerRow);
+    const labelRow = sheet.getRow(row);
+    const valueRow = sheet.getRow(row + 1);
+    labelRow.height = 18;
+    valueRow.height = 26;
+
+    chunk.forEach((card, idx) => {
+      const startCol = idx * cardWidth + 1;
+      const endCol = startCol + cardWidth - 1;
+      sheet.mergeCells(row, startCol, row, endCol);
+      sheet.mergeCells(row + 1, startCol, row + 1, endCol);
+
+      const labelCell = sheet.getCell(row, startCol);
+      labelCell.value = card.label;
+      labelCell.font = { size: 9, color: { argb: "FF64748B" }, bold: true };
+      labelCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      labelCell.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+      labelCell.border = {
+        top: { style: "thin", color: { argb: "FFE2E8F0" } },
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+
+      const valueCell = sheet.getCell(row + 1, startCol);
+      valueCell.value = card.value;
+      valueCell.font = { size: 14, bold: true, color: { argb: "FF0F172A" } };
+      valueCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+      valueCell.alignment = { vertical: "middle", horizontal: card.money ? "right" : "left", indent: 1 };
+      valueCell.border = {
+        left: { style: "thin", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+        right: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
+      if (card.money && typeof card.value === "number") {
+        valueCell.numFmt = TURKISH_MONEY_FORMAT;
+      }
+    });
+    row += 2;
+  }
   return row + 1;
 }
 
@@ -106,6 +160,10 @@ export function addMetricTable(
     const added = sheet.addRow([row.label, row.value, row.desc ?? ""]);
     if (row.money && typeof row.value === "number") {
       added.getCell(2).numFmt = TURKISH_MONEY_FORMAT;
+      added.getCell(2).alignment = { horizontal: "right" };
+    }
+    if (row.percent && typeof row.value === "number") {
+      added.getCell(2).numFmt = TURKISH_PERCENT_FORMAT;
       added.getCell(2).alignment = { horizontal: "right" };
     }
     if (row.net && typeof row.value === "number") {

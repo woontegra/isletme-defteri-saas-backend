@@ -1,19 +1,12 @@
 import ExcelJS from "exceljs";
 import type { IncomeRecord } from "@prisma/client";
 import { INCOME_SALE_TYPE_LABELS, INCOME_STATUS_LABELS } from "./export-labels";
+import { countWhere, sumAmount, sumWhere } from "./export-analytics";
 import {
-  averageAmount,
-  countWhere,
-  groupBySum,
-  maxAmount,
-  sumAmount,
-  sumWhere,
-} from "./export-analytics";
-import {
-  addAnalysisTable,
   addDetailTable,
   addMetricTable,
   addProfessionalHeader,
+  addSectionTitle,
   setupWorksheetPrint,
 } from "./excel-report.helpers";
 import { exportFileDate, safeMoney } from "./format.utils";
@@ -32,56 +25,39 @@ export async function buildIncomesProfessionalExcel(options: {
   const { records, tenantName, periodLabel } = options;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Woontegra";
-  const sheet = workbook.addWorksheet("Gelirler");
 
   const total = sumAmount(records, (r) => Number(r.tutar));
   const collected = sumWhere(records, (r) => r.tahsilDurumu === "TAHSIL_EDILDI", (r) => Number(r.tutar));
   const pending = sumWhere(records, (r) => r.tahsilDurumu === "BEKLIYOR", (r) => Number(r.tutar));
   const invoiced = countWhere(records, (r) => r.faturaKesildiMi);
   const notInvoiced = records.length - invoiced;
-  const avg = averageAmount(records, (r) => Number(r.tutar));
-  const max = maxAmount(records, (r) => Number(r.tutar));
 
-  let row = addProfessionalHeader(sheet, {
+  const ozet = workbook.addWorksheet("Özet");
+  let row = addProfessionalHeader(ozet, {
     reportTitle: "Gelirler Raporu",
     tenantName,
     periodLabel,
     recordCount: records.length,
   });
-
-  row = addMetricTable(sheet, row, [
-    { label: "Toplam Gelir", value: total, money: true, desc: "Dönem toplamı" },
+  row = addSectionTitle(ozet, row, "Rapor Özeti", 3);
+  addMetricTable(ozet, row, [
+    { label: "Toplam Gelir", value: total, money: true },
     { label: "Tahsil Edilen", value: collected, money: true },
     { label: "Bekleyen Tahsilat", value: pending, money: true },
     { label: "Fatura Kesilen", value: invoiced, desc: "Adet" },
     { label: "Fatura Kesilmeyen", value: notInvoiced, desc: "Adet" },
-    { label: "Ortalama Gelir", value: avg, money: true },
-    { label: "En Yüksek Gelir", value: max, money: true },
     { label: "Kayıt Sayısı", value: records.length, desc: "Adet" },
   ]);
+  setupWorksheetPrint(ozet, ozet.rowCount, 3);
 
-  const saleTypeRows = groupBySum(
-    records,
-    (r) => (r.satisTuru ? INCOME_SALE_TYPE_LABELS[r.satisTuru] ?? r.satisTuru : "Belirtilmemiş"),
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Satış Türü Özeti", saleTypeRows);
-
-  const collectionRows = groupBySum(
-    records,
-    (r) => INCOME_STATUS_LABELS[r.tahsilDurumu] ?? r.tahsilDurumu,
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Tahsil Durumu Özeti", collectionRows);
-
-  const invoiceRows = groupBySum(
-    records,
-    (r) => (r.faturaKesildiMi ? "Kesildi" : "Kesilmedi"),
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Fatura Özeti", invoiceRows);
-
-  row = addDetailTable(sheet, row, "Detay Gelir Listesi", {
+  const detay = workbook.addWorksheet("Gelir Detaylari");
+  row = addProfessionalHeader(detay, {
+    reportTitle: "Gelir Detayları",
+    tenantName,
+    periodLabel,
+    recordCount: records.length,
+  });
+  addDetailTable(detay, row, "Gelir Detayları", {
     headers: [
       "Tarih",
       "Proje / Marka",
@@ -109,8 +85,8 @@ export async function buildIncomesProfessionalExcel(options: {
       formatExcelBoolean(r.faturaKesildiMi),
     ]),
   });
+  setupWorksheetPrint(detay, detay.rowCount, 10);
 
-  setupWorksheetPrint(sheet, sheet.rowCount, 10);
   return workbookToBuffer(workbook);
 }
 

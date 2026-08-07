@@ -1,12 +1,12 @@
 import ExcelJS from "exceljs";
 import type { SubscriptionRecord } from "@prisma/client";
 import { BILLING_LABELS, SUBSCRIPTION_STATUS_LABELS } from "./export-labels";
-import { countWhere, groupBySum, sumAmount, sumWhere } from "./export-analytics";
+import { countWhere, sumWhere } from "./export-analytics";
 import {
-  addAnalysisTable,
   addDetailTable,
   addMetricTable,
   addProfessionalHeader,
+  addSectionTitle,
   setupWorksheetPrint,
 } from "./excel-report.helpers";
 import { exportFileDate, safeMoney } from "./format.utils";
@@ -30,7 +30,6 @@ export async function buildSubscriptionsProfessionalExcel(options: {
   const { records, tenantName } = options;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Woontegra";
-  const sheet = workbook.addWorksheet("Abonelikler");
 
   const active = countWhere(records, (r) => r.durum === "AKTIF");
   const monthly = sumWhere(records, (r) => r.faturaDonemi === "AYLIK" && r.durum === "AKTIF", (r) => Number(r.tutar));
@@ -39,59 +38,37 @@ export async function buildSubscriptionsProfessionalExcel(options: {
   const paused = countWhere(records, (r) => r.durum === "DURAKLATILDI");
   const cancelled = countWhere(records, (r) => r.durum === "IPTAL");
 
-  let row = addProfessionalHeader(sheet, {
+  const ozet = workbook.addWorksheet("Özet");
+  let row = addProfessionalHeader(ozet, {
     reportTitle: "Abonelikler Raporu",
     tenantName,
     recordCount: records.length,
   });
-
-  row = addMetricTable(sheet, row, [
+  row = addSectionTitle(ozet, row, "Rapor Özeti", 3);
+  addMetricTable(ozet, row, [
     { label: "Aktif Abonelik", value: active, desc: "Adet" },
-    { label: "Aylık Toplam", value: monthly, money: true, desc: "Aktif aylık abonelikler" },
-    { label: "Yıllık Toplam", value: yearly, money: true, desc: "Aktif yıllık abonelikler" },
+    { label: "Aylık Toplam", value: monthly, money: true },
+    { label: "Yıllık Toplam", value: yearly, money: true },
     { label: "Yaklaşan Yenileme", value: upcoming, desc: "30 gün içinde" },
     { label: "Duraklatılan", value: paused, desc: "Adet" },
     { label: "İptal", value: cancelled, desc: "Adet" },
     { label: "Kayıt Sayısı", value: records.length, desc: "Adet" },
   ]);
+  setupWorksheetPrint(ozet, ozet.rowCount, 3);
 
-  const billingRows = groupBySum(
-    records,
-    (r) => BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi,
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Fatura Dönemi Özeti", billingRows);
-
-  const statusRows = groupBySum(
-    records,
-    (r) => SUBSCRIPTION_STATUS_LABELS[r.durum] ?? r.durum,
-    (r) => Number(r.tutar)
-  );
-  row = addAnalysisTable(sheet, row, "Durum Özeti", statusRows);
-
-  const upcomingRecords = records.filter((r) => r.durum === "AKTIF" && isUpcomingRenewal(r.sonrakiYenilemeTarihi));
-  row = addDetailTable(sheet, row, "Yaklaşan Yenilemeler (30 Gün)", {
-    headers: ["Hizmet", "Kategori", "Dönem", "Tutar", "Yenileme", "Durum"],
-    widths: [22, 16, 12, 14, 14, 12],
-    moneyColumns: [4],
-    rows: upcomingRecords.map((r) => [
-      formatExcelText(r.hizmetAdi),
-      formatExcelText(r.kategori),
-      BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi,
-      safeMoney(r.tutar),
-      formatExcelDate(r.sonrakiYenilemeTarihi),
-      SUBSCRIPTION_STATUS_LABELS[r.durum] ?? r.durum,
-    ]),
+  const detay = workbook.addWorksheet("Abonelik Detaylari");
+  row = addProfessionalHeader(detay, {
+    reportTitle: "Abonelik Detayları",
+    tenantName,
+    recordCount: records.length,
   });
-
-  row = addDetailTable(sheet, row, "Detay Abonelik Listesi", {
-    headers: ["Hizmet", "Kategori", "Proje", "Dönem", "Tutar", "Yenileme", "Durum", "Not"],
-    widths: [22, 16, 14, 12, 14, 14, 12, 24],
-    moneyColumns: [5],
+  addDetailTable(detay, row, "Abonelik Detayları", {
+    headers: ["Hizmet", "Kategori", "Fatura Dönemi", "Tutar", "Sonraki Yenileme", "Durum", "Not"],
+    widths: [22, 16, 14, 14, 14, 12, 24],
+    moneyColumns: [4],
     rows: records.map((r) => [
       formatExcelText(r.hizmetAdi),
       formatExcelText(r.kategori),
-      formatExcelText(r.projeMarka),
       BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi,
       safeMoney(r.tutar),
       formatExcelDate(r.sonrakiYenilemeTarihi),
@@ -99,8 +76,8 @@ export async function buildSubscriptionsProfessionalExcel(options: {
       formatExcelText(r.not),
     ]),
   });
+  setupWorksheetPrint(detay, detay.rowCount, 7);
 
-  setupWorksheetPrint(sheet, sheet.rowCount, 8);
   return workbookToBuffer(workbook);
 }
 

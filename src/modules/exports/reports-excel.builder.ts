@@ -8,7 +8,6 @@ import {
   formatExportPercent,
   formatMonthLabel,
   netProjectStatus,
-  progressBarText,
   ratioOf,
   safeMoney,
 } from "./format.utils";
@@ -132,20 +131,17 @@ export async function buildProfessionalReportsExcel(
   const trend = workbook.addWorksheet("Aylık Trend");
   row = addReportHeaderBlock(trend, { ...headerMeta, reportTitle: "Aylık Trend" });
   const trendHeader = row;
-  trend.addRow(["Ay", "Gelir", "Gider", "Net", "Gelir Bar", "Gider Bar"]);
-  styleDarkHeaderRow(trend, trendHeader, 6);
+  trend.addRow(["Ay", "Gelir", "Gider", "Net"]);
+  styleDarkHeaderRow(trend, trendHeader, 4);
   if (summary.aylikTrend.length === 0) {
-    addEmptyMessageRow(trend, trendHeader + 1, "Bu dönem için kayıt bulunamadı.", 6);
+    addEmptyMessageRow(trend, trendHeader + 1, "Bu dönem için kayıt bulunamadı.", 4);
   } else {
-    const maxTrend = Math.max(...summary.aylikTrend.map((m) => Math.max(m.gelir, m.gider)), 1);
     for (const month of summary.aylikTrend) {
       const added = trend.addRow([
         formatMonthLabel(month.ay),
         safeMoney(month.gelir),
         safeMoney(month.gider),
         safeMoney(month.net),
-        progressBarText(ratioOf(month.gelir, maxTrend)),
-        progressBarText(ratioOf(month.gider, maxTrend)),
       ]);
       applyNetValueStyle(added.getCell(4), safeMoney(month.net));
     }
@@ -153,28 +149,28 @@ export async function buildProfessionalReportsExcel(
     applyMoneyFormat(trend, 3, trendHeader + 1);
     applyMoneyFormat(trend, 4, trendHeader + 1);
   }
-  setColumnWidths(trend, [20, 16, 16, 16, 14, 14]);
-  finalizeDataTable(trend, trendHeader, 6);
+  setColumnWidths(trend, [20, 16, 16, 16]);
+  finalizeDataTable(trend, trendHeader, 4);
 
   // 4. Gider Kategorileri
   const cats = workbook.addWorksheet("Gider Kategorileri");
   row = addReportHeaderBlock(cats, { ...headerMeta, reportTitle: "Gider Kategorileri" });
   const catHeader = row;
-  cats.addRow(["Kategori", "Toplam Gider", "Kayıt Sayısı", "Oran", "Bar"]);
-  styleDarkHeaderRow(cats, catHeader, 5);
+  cats.addRow(["Kategori", "Toplam Gider", "Kayıt Sayısı", "Oran"]);
+  styleDarkHeaderRow(cats, catHeader, 4);
   const catTotal = summary.giderKategorileri.reduce((s, c) => s + c.toplam, 0);
   if (summary.giderKategorileri.length === 0) {
-    addEmptyMessageRow(cats, catHeader + 1, "Bu dönem için kayıt bulunamadı.", 5);
+    addEmptyMessageRow(cats, catHeader + 1, "Bu dönem için kayıt bulunamadı.", 4);
   } else {
     for (const cat of summary.giderKategorileri) {
       const rate = ratioOf(cat.toplam, catTotal);
-      const added = cats.addRow([cat.kategori, safeMoney(cat.toplam), cat.adet, rate, progressBarText(rate)]);
+      const added = cats.addRow([cat.kategori, safeMoney(cat.toplam), cat.adet, rate]);
       added.getCell(4).numFmt = "0.0%";
     }
     applyMoneyFormat(cats, 2, catHeader + 1);
   }
-  setColumnWidths(cats, [24, 18, 14, 12, 14]);
-  finalizeDataTable(cats, catHeader, 5);
+  setColumnWidths(cats, [24, 18, 14, 12]);
+  finalizeDataTable(cats, catHeader, 4);
 
   // 5. Proje Marka
   const proje = workbook.addWorksheet("Proje Marka");

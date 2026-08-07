@@ -6,163 +6,389 @@ import {
   listCapitalPartners,
   listPartnerCapitalTransactions,
 } from "../capital/capital.service";
-import { TRANSACTION_TYPE_LABELS, WARNING_LABELS } from "./export-labels";
-import { exportFileDate, formatExportPercent, safeMoney } from "./format.utils";
+import { listCompanyAccounts } from "../settings/company-account.service";
 import {
-  addReportHeaderBlock,
-  applyMoneyFormat,
-  applyNetValueStyle,
-  finalizeDataTable,
+  COMPANY_ACCOUNT_TYPE_LABELS,
+  TRANSACTION_TYPE_LABELS,
+  WARNING_LABELS,
+} from "./export-labels";
+import { exportFileDate, formatExportDateTime, safeMoney } from "./format.utils";
+import {
+  applyDataRowStyles,
   formatExcelDate,
   formatExcelText,
-  setColumnWidths,
-  styleDarkHeaderRow,
+  TURKISH_DATETIME_FORMAT,
+  TURKISH_PERCENT_FORMAT,
   workbookToBuffer,
 } from "./excel.styles";
-import { getTenantExportMeta } from "./tenant-meta";
+import { getExportCompanyInfo } from "./tenant-meta";
 
-function addMetricTable(
-  sheet: ExcelJS.Worksheet,
-  startRow: number,
-  rows: Array<{ label: string; value: string | number; desc?: string; money?: boolean; net?: boolean }>
-): number {
-  const headerRow = startRow;
-  sheet.addRow(["Gösterge", "Değer", "Açıklama"]);
-  styleDarkHeaderRow(sheet, headerRow, 3);
-  let current = headerRow + 1;
-  for (const row of rows) {
-    const added = sheet.addRow([row.label, row.value, row.desc ?? ""]);
-    if (row.money && typeof row.value === "number") {
-      added.getCell(2).numFmt = '#.##0,00" ₺"';
-    }
-    if (row.net && typeof row.value === "number") {
-      applyNetValueStyle(added.getCell(2), row.value);
-    }
-    current += 1;
+const MONEY_FORMAT = '#,##0.00 "₺"';
+const HEADER_FILL = "FFF0F0F0";
+const BORDER = "FFCCCCCC";
+
+type CellValue = string | number | Date | null;
+
+interface TableOptions {
+  widths: number[];
+  moneyColumns?: number[];
+  percentColumns?: number[];
+  dateColumns?: number[];
+  dateTimeColumns?: number[];
+}
+
+function parseIsoDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function styleHeaderRow(sheet: ExcelJS.Worksheet, rowNumber: number, colCount: number): void {
+  const row = sheet.getRow(rowNumber);
+  row.font = { bold: true, size: 10 };
+  row.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+  for (let c = 1; c <= colCount; c += 1) {
+    const cell = row.getCell(c);
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_FILL } };
+    cell.border = {
+      top: { style: "thin", color: { argb: BORDER } },
+      left: { style: "thin", color: { argb: BORDER } },
+      bottom: { style: "thin", color: { argb: BORDER } },
+      right: { style: "thin", color: { argb: BORDER } },
+    };
   }
-  setColumnWidths(sheet, [32, 22, 36]);
-  finalizeDataTable(sheet, headerRow, 3);
-  return current + 1;
+  row.height = 20;
+}
+
+function applyCellFormats(
+  sheet: ExcelJS.Worksheet,
+  rowNumber: number,
+  options: TableOptions
+): void {
+  for (const col of options.moneyColumns ?? []) {
+    const cell = sheet.getCell(rowNumber, col);
+    if (typeof cell.value === "number") {
+      cell.numFmt = MONEY_FORMAT;
+      cell.alignment = { horizontal: "right", vertical: "middle" };
+    }
+  }
+  for (const col of options.percentColumns ?? []) {
+    const cell = sheet.getCell(rowNumber, col);
+    if (typeof cell.value === "number") {
+      cell.numFmt = TURKISH_PERCENT_FORMAT;
+      cell.alignment = { horizontal: "right", vertical: "middle" };
+    }
+  }
+  for (const col of options.dateColumns ?? []) {
+    const cell = sheet.getCell(rowNumber, col);
+    if (cell.value instanceof Date) {
+      cell.numFmt = "dd.mm.yyyy";
+      cell.alignment = { horizontal: "left", vertical: "middle" };
+    }
+  }
+  for (const col of options.dateTimeColumns ?? []) {
+    const cell = sheet.getCell(rowNumber, col);
+    if (cell.value instanceof Date) {
+      cell.numFmt = TURKISH_DATETIME_FORMAT;
+      cell.alignment = { horizontal: "left", vertical: "middle" };
+    }
+  }
+}
+
+function writeDataTable(
+  sheet: ExcelJS.Worksheet,
+  headerRow: number,
+  headers: string[],
+  rows: CellValue[][],
+  options: TableOptions
+): number {
+  const colCount = headers.length;
+
+  headers.forEach((header, idx) => {
+    sheet.getCell(headerRow, idx + 1).value = header;
+  });
+  styleHeaderRow(sheet, headerRow, colCount);
+
+  let row = headerRow + 1;
+  for (const data of rows) {
+    data.forEach((value, idx) => {
+      sheet.getCell(row, idx + 1).value = value;
+    });
+    applyCellFormats(sheet, row, options);
+    row += 1;
+  }
+
+  options.widths.forEach((width, idx) => {
+    sheet.getColumn(idx + 1).width = width;
+  });
+
+  if (rows.length > 0) {
+    applyDataRowStyles(sheet, headerRow + 1, colCount);
+    for (const col of options.moneyColumns ?? []) {
+      sheet.getColumn(col).numFmt = MONEY_FORMAT;
+    }
+  }
+
+  for (let c = 1; c <= colCount; c += 1) {
+    sheet.getColumn(c).alignment = { ...sheet.getColumn(c).alignment, wrapText: true, vertical: "middle" };
+  }
+
+  sheet.views = [{ state: "frozen", ySplit: headerRow, activeCell: `A${headerRow + 1}` }];
+  sheet.autoFilter = {
+    from: { row: headerRow, column: 1 },
+    to: { row: Math.max(headerRow, row - 1), column: colCount },
+  };
+
+  sheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, paperSize: 9 };
+
+  return row;
+}
+
+function writeOzetSheet(
+  sheet: ExcelJS.Worksheet,
+  tenantName: string,
+  summary: Awaited<ReturnType<typeof getCapitalSummary>>
+): void {
+  sheet.getCell(1, 1).value = "Woontegra İşletme Defteri";
+  sheet.getCell(1, 1).font = { bold: true, size: 12 };
+  sheet.getCell(2, 1).value = "Sermaye / Şirket Bilgileri Özeti";
+  sheet.getCell(2, 1).font = { bold: true, size: 11 };
+  sheet.getCell(3, 1).value = "Şirket";
+  sheet.getCell(3, 2).value = tenantName;
+  sheet.getCell(4, 1).value = "Oluşturma Tarihi";
+  sheet.getCell(4, 2).value = formatExportDateTime();
+
+  const headerRow = 6;
+  const rows: CellValue[][] = [
+    [
+      "Ana Sermaye",
+      safeMoney(summary.anaSermaye),
+      "Şirket ayarlarında tanımlı ana sermaye",
+    ],
+    [
+      "Ödenen Ana Sermaye",
+      safeMoney(summary.toplamAnaSermayeOdemesi),
+      "Ana sermaye ödemesi hareketleri toplamı",
+    ],
+    [
+      "Kalan Ana Sermaye",
+      safeMoney(summary.kalanAnaSermayeOdemesi),
+      "Ana sermaye - ödenen ana sermaye",
+    ],
+    ["Ana Sermaye Ödeme Oranı", summary.anaSermayeOdemeOrani, ""],
+    ["Ortak Para Limiti", safeMoney(summary.ortakParaLimiti), ""],
+    [
+      "Net Ortak Alacağı",
+      safeMoney(summary.netOrtakAlacagi),
+      "Ortak para koyma - para çekme",
+    ],
+    [
+      "Kalan Ortak Para Limiti",
+      safeMoney(summary.kalanLimit),
+      "Ortak para limiti - net ortak alacağı",
+    ],
+    ["Ortak Para Kullanım Oranı", summary.kullanimOrani, ""],
+    [
+      "Uyarı Durumu",
+      WARNING_LABELS[summary.uyariDurumu] ?? summary.uyariDurumu,
+      "",
+    ],
+  ];
+
+  writeDataTable(sheet, headerRow, ["Gösterge", "Değer", "Açıklama"], rows, {
+    widths: [32, 20, 48],
+  });
+
+  const moneyDataRows = [7, 8, 9, 11, 12, 13];
+  const percentDataRows = [10, 14];
+  for (const r of moneyDataRows) {
+    applyCellFormats(sheet, r, { widths: [], moneyColumns: [2] });
+  }
+  for (const r of percentDataRows) {
+    applyCellFormats(sheet, r, { widths: [], percentColumns: [2] });
+  }
+}
+
+function writeKeyValueSheet(
+  sheet: ExcelJS.Worksheet,
+  rows: Array<{ label: string; value: CellValue; money?: boolean; percent?: boolean }>
+): void {
+  const data: CellValue[][] = rows.map((r) => [r.label, r.value]);
+  writeDataTable(sheet, 1, ["Alan", "Değer"], data, { widths: [36, 28] });
+
+  rows.forEach((item, idx) => {
+    const row = idx + 2;
+    if (item.money) {
+      applyCellFormats(sheet, row, { widths: [], moneyColumns: [2] });
+    } else if (item.percent) {
+      applyCellFormats(sheet, row, { widths: [], percentColumns: [2] });
+    }
+  });
 }
 
 export async function buildCapitalExcel(
   tenantId: string
 ): Promise<{ buffer: Buffer; filename: string }> {
-  const [settings, summary, increases, partners, transactions, { tenantName }] = await Promise.all([
-    getCapitalSettings(tenantId),
-    getCapitalSummary(tenantId),
-    listCapitalIncreases(tenantId),
-    listCapitalPartners(tenantId),
-    listPartnerCapitalTransactions(tenantId),
-    getTenantExportMeta(tenantId),
-  ]);
+  const [settings, summary, increases, partners, transactions, accounts, company] =
+    await Promise.all([
+      getCapitalSettings(tenantId),
+      getCapitalSummary(tenantId),
+      listCapitalIncreases(tenantId),
+      listCapitalPartners(tenantId),
+      listPartnerCapitalTransactions(tenantId),
+      listCompanyAccounts(tenantId),
+      getExportCompanyInfo(tenantId),
+    ]);
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Woontegra";
+  workbook.created = new Date();
 
-  const ayarlar = workbook.addWorksheet("Sirket Ayarlari");
-  let row = addReportHeaderBlock(ayarlar, {
-    reportTitle: "Sermaye / Şirket Bilgileri",
-    tenantName,
-  });
-  row = addMetricTable(ayarlar, row, [
-    { label: "Şirket Ünvanı", value: formatExcelText(settings.sirketUnvani) },
+  const tenantName = company.tenantName;
+
+  // 1. Ozet
+  writeOzetSheet(workbook.addWorksheet("Ozet"), tenantName, summary);
+
+  // 2. Sirket Bilgileri
+  writeKeyValueSheet(workbook.addWorksheet("Sirket Bilgileri"), [
+    { label: "Şirket Ünvanı", value: formatExcelText(settings.sirketUnvani ?? tenantName) },
     { label: "Kuruluş Tarihi", value: formatExcelDate(settings.kurulusTarihi) },
-    { label: "Ticaret Sicil Gazete Tarihi", value: formatExcelDate(settings.ticaretSicilGazeteTarihi) },
+    {
+      label: "Ticaret Sicil Gazetesi Yayın Tarihi",
+      value: formatExcelDate(settings.ticaretSicilGazeteTarihi),
+    },
     { label: "Ana Sermaye", value: safeMoney(settings.anaSermaye), money: true },
-    { label: "Ortak Para Çarpanı", value: safeMoney(settings.ortakParaCarpani) },
-    { label: "Uyarı Oranı", value: formatExportPercent(settings.uyariOrani) },
-    { label: "Son Sermaye Artırım Tarihi", value: formatExcelDate(settings.sonSermayeArtirimTarihi) },
+    { label: "Ortak Para Çarpanı", value: Number(settings.ortakParaCarpani) },
+    { label: "Uyarı Oranı", value: settings.uyariOrani, percent: true },
+    {
+      label: "Son Sermaye Artırım Tarihi",
+      value: formatExcelDate(settings.sonSermayeArtirimTarihi),
+    },
     { label: "Notlar", value: formatExcelText(settings.notlar) },
   ]);
 
-  const ozet = workbook.addWorksheet("Ozet");
-  row = addReportHeaderBlock(ozet, { reportTitle: "Sermaye Özeti", tenantName });
-  addMetricTable(ozet, row, [
-    { label: "Ana Sermaye", value: safeMoney(summary.anaSermaye), money: true },
-    { label: "Ödenen Ana Sermaye", value: safeMoney(summary.toplamAnaSermayeOdemesi), money: true },
-    { label: "Kalan Ana Sermaye", value: safeMoney(summary.kalanAnaSermayeOdemesi), money: true },
-    { label: "Ana Sermaye Ödeme Oranı", value: formatExportPercent(summary.anaSermayeOdemeOrani) },
-    { label: "Ortak Para Limiti", value: safeMoney(summary.ortakParaLimiti), money: true },
-    { label: "Net Ortak Alacağı", value: safeMoney(summary.netOrtakAlacagi), money: true },
-    { label: "Kalan Ortak Para Limiti", value: safeMoney(summary.kalanLimit), money: true },
-    { label: "Ortak Para Kullanım Oranı", value: formatExportPercent(summary.kullanimOrani) },
-    {
-      label: "Uyarı Durumu",
-      value: WARNING_LABELS[summary.uyariDurumu] ?? summary.uyariDurumu,
-      desc: "Mali müşavirinizle değerlendirmeniz önerilir",
-    },
-  ]);
-
-  const ortaklar = workbook.addWorksheet("Ortaklar");
-  row = addReportHeaderBlock(ortaklar, { reportTitle: "Ortaklar", tenantName, recordCount: partners.length });
-  const partnerHeader = row;
-  ortaklar.addRow(["Ad Soyad", "Ünvan", "Telefon", "E-posta", "Durum"]);
-  styleDarkHeaderRow(ortaklar, partnerHeader, 5);
-  for (const p of partners) {
-    ortaklar.addRow([
+  // 3. Ortaklar
+  writeDataTable(
+    workbook.addWorksheet("Ortaklar"),
+    1,
+    ["Ad Soyad", "Ünvan", "Telefon", "E-posta", "Durum", "Oluşturma Tarihi", "Güncelleme Tarihi"],
+    partners.map((p) => [
       p.adSoyad,
       formatExcelText(p.unvan),
       formatExcelText(p.telefon),
       formatExcelText(p.eposta),
       p.aktifMi ? "Aktif" : "Pasif",
-    ]);
-  }
-  setColumnWidths(ortaklar, [22, 18, 16, 24, 12]);
-  finalizeDataTable(ortaklar, partnerHeader, 5);
+      parseIsoDate(p.createdAt),
+      parseIsoDate(p.updatedAt),
+    ]),
+    {
+      widths: [22, 16, 14, 26, 10, 18, 18],
+      dateTimeColumns: [6, 7],
+    }
+  );
 
-  const artirim = workbook.addWorksheet("Sermaye Artirimlari");
-  row = addReportHeaderBlock(artirim, {
-    reportTitle: "Sermaye Artırım Geçmişi",
-    tenantName,
-    recordCount: increases.length,
-  });
-  const incHeader = row;
-  artirim.addRow(["Tarih", "Önceki Sermaye", "Yeni Sermaye", "Açıklama"]);
-  styleDarkHeaderRow(artirim, incHeader, 4);
-  for (const inc of increases) {
-    artirim.addRow([
-      formatExcelDate(inc.tarih),
-      inc.oncekiSermaye !== null ? safeMoney(inc.oncekiSermaye) : "—",
-      safeMoney(inc.yeniSermaye),
-      formatExcelText(inc.aciklama),
-    ]);
-  }
-  setColumnWidths(artirim, [14, 18, 18, 32]);
-  applyMoneyFormat(artirim, 2, incHeader + 1);
-  applyMoneyFormat(artirim, 3, incHeader + 1);
-  finalizeDataTable(artirim, incHeader, 4);
+  // 4. Banka Kasa Hesaplari
+  writeDataTable(
+    workbook.addWorksheet("Banka Kasa Hesaplari"),
+    1,
+    [
+      "Hesap Adı",
+      "Hesap Türü",
+      "Banka Adı",
+      "IBAN",
+      "Hesap No",
+      "Para Birimi",
+      "Açıklama",
+      "Durum",
+      "Oluşturma Tarihi",
+      "Güncelleme Tarihi",
+    ],
+    accounts.map((acc) => [
+      acc.hesapAdi,
+      COMPANY_ACCOUNT_TYPE_LABELS[acc.hesapTuru] ?? acc.hesapTuru,
+      formatExcelText(acc.bankaAdi),
+      formatExcelText(acc.iban),
+      formatExcelText(acc.hesapNo),
+      acc.paraBirimi,
+      formatExcelText(acc.aciklama),
+      acc.aktifMi ? "Aktif" : "Pasif",
+      parseIsoDate(acc.createdAt),
+      parseIsoDate(acc.updatedAt),
+    ]),
+    {
+      widths: [22, 12, 20, 26, 14, 10, 24, 10, 18, 18],
+      dateTimeColumns: [9, 10],
+    }
+  );
 
-  const hareket = workbook.addWorksheet("Hareketler");
-  row = addReportHeaderBlock(hareket, {
-    reportTitle: "Sermaye ve Ortak Para Hareketleri",
-    tenantName,
-    recordCount: transactions.length,
-  });
-  const txHeader = row;
-  hareket.addRow(["Tarih", "Ortak", "Tür", "Hesap", "Açıklama", "Tutar"]);
-  styleDarkHeaderRow(hareket, txHeader, 6);
-  for (const tx of transactions) {
-    const hesapLabel = tx.companyAccount
-      ? tx.companyAccount.bankaAdi
-        ? `${tx.companyAccount.bankaAdi} - ${tx.companyAccount.hesapAdi}`
-        : tx.companyAccount.hesapAdi
-      : "—";
-    const added = hareket.addRow([
-      formatExcelDate(tx.tarih),
+  // 5. Sermaye Hareketleri (tarih yeniden eskiye — API zaten desc sıralıyor)
+  writeDataTable(
+    workbook.addWorksheet("Sermaye Hareketleri"),
+    1,
+    [
+      "Tarih",
+      "Ortak",
+      "İşlem Türü",
+      "Hesap",
+      "Banka Adı",
+      "Açıklama",
+      "Tutar",
+      "Oluşturma Tarihi",
+      "Güncelleme Tarihi",
+    ],
+    transactions.map((tx) => [
+      parseIsoDate(tx.tarih),
       formatExcelText(tx.ortakAdi),
       TRANSACTION_TYPE_LABELS[tx.tur] ?? tx.tur,
-      formatExcelText(hesapLabel),
+      formatExcelText(tx.companyAccount?.hesapAdi),
+      formatExcelText(tx.companyAccount?.bankaAdi),
       formatExcelText(tx.aciklama),
       safeMoney(tx.tutar),
-    ]);
-    if (tx.tur === "PARA_CEKME") {
-      applyNetValueStyle(added.getCell(6), -safeMoney(tx.tutar));
+      parseIsoDate(tx.createdAt),
+      parseIsoDate(tx.updatedAt),
+    ]),
+    {
+      widths: [12, 18, 22, 20, 18, 28, 14, 18, 18],
+      moneyColumns: [7],
+      dateColumns: [1],
+      dateTimeColumns: [8, 9],
     }
+  );
+
+  // 6. Sermaye Artirimlari
+  const artirimSheet = workbook.addWorksheet("Sermaye Artirimlari");
+  if (increases.length === 0) {
+    artirimSheet.getCell(2, 1).value = "Henüz sermaye artırımı kaydı bulunmuyor.";
+    artirimSheet.getCell(2, 1).font = { italic: true };
+    artirimSheet.getColumn(1).width = 48;
+  } else {
+    writeDataTable(
+      artirimSheet,
+      1,
+      [
+        "Tarih",
+        "Önceki Sermaye",
+        "Yeni Sermaye",
+        "Açıklama",
+        "Oluşturma Tarihi",
+        "Güncelleme Tarihi",
+      ],
+      increases.map((inc) => [
+        parseIsoDate(inc.tarih),
+        inc.oncekiSermaye !== null ? safeMoney(inc.oncekiSermaye) : null,
+        safeMoney(inc.yeniSermaye),
+        formatExcelText(inc.aciklama),
+        parseIsoDate(inc.createdAt),
+        parseIsoDate(inc.updatedAt),
+      ]),
+      {
+        widths: [12, 16, 16, 36, 18, 18],
+        moneyColumns: [2, 3],
+        dateColumns: [1],
+        dateTimeColumns: [5, 6],
+      }
+    );
   }
-  setColumnWidths(hareket, [14, 20, 22, 24, 28, 14]);
-  applyMoneyFormat(hareket, 6, txHeader + 1);
-  finalizeDataTable(hareket, txHeader, 6);
 
   return {
     buffer: await workbookToBuffer(workbook),

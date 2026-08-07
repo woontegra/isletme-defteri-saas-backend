@@ -14,7 +14,7 @@ import {
   buildIncomesProfessionalPdfHtml,
   buildSubscriptionsProfessionalPdfHtml,
 } from "./module-pdf.builder";
-import { getTenantExportMeta } from "./tenant-meta";
+import { getExportCompanyInfo } from "./tenant-meta";
 import {
   getCapitalSettings,
   getCapitalSummary,
@@ -22,6 +22,7 @@ import {
   listCapitalPartners,
   listPartnerCapitalTransactions,
 } from "../capital/capital.service";
+import { listCompanyAccounts } from "../settings/company-account.service";
 
 async function htmlToPdfBuffer(html: string): Promise<Buffer> {
   const browser = await puppeteer.launch({
@@ -48,14 +49,14 @@ export async function buildIncomesPdf(
 ): Promise<{ buffer: Buffer; filename: string }> {
   const periodQuery = parseModulePeriodQuery(rawQuery);
   const periodLabel = getModulePeriodLabelFromQuery(periodQuery);
-  const [records, { tenantName }] = await Promise.all([
+  const [records, company] = await Promise.all([
     prisma.incomeRecord.findMany({
       where: buildIncomeExpenseWhere(tenantId, periodQuery),
       orderBy: [{ tarih: "desc" }],
     }),
-    getTenantExportMeta(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
-  const html = buildIncomesProfessionalPdfHtml({ records, tenantName, periodLabel });
+  const html = buildIncomesProfessionalPdfHtml({ records, company, periodLabel });
   return { buffer: await htmlToPdfBuffer(html), filename: `gelirler-${exportFileDate()}.pdf` };
 }
 
@@ -65,34 +66,34 @@ export async function buildExpensesPdf(
 ): Promise<{ buffer: Buffer; filename: string }> {
   const periodQuery = parseModulePeriodQuery(rawQuery);
   const periodLabel = getModulePeriodLabelFromQuery(periodQuery);
-  const [records, { tenantName }] = await Promise.all([
+  const [records, company] = await Promise.all([
     prisma.expenseRecord.findMany({
       where: buildIncomeExpenseWhere(tenantId, periodQuery),
       orderBy: [{ tarih: "desc" }],
     }),
-    getTenantExportMeta(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
-  const html = buildExpensesProfessionalPdfHtml({ records, tenantName, periodLabel });
+  const html = buildExpensesProfessionalPdfHtml({ records, company, periodLabel });
   return { buffer: await htmlToPdfBuffer(html), filename: `giderler-${exportFileDate()}.pdf` };
 }
 
 export async function buildDebtsPdf(tenantId: string): Promise<{ buffer: Buffer; filename: string }> {
-  const [records, { tenantName }] = await Promise.all([
+  const [records, company] = await Promise.all([
     prisma.debtRecord.findMany({ where: { tenantId }, orderBy: [{ vadeTarihi: "asc" }] }),
-    getTenantExportMeta(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
-  const html = buildDebtsProfessionalPdfHtml({ records, tenantName });
+  const html = buildDebtsProfessionalPdfHtml({ records, company });
   return { buffer: await htmlToPdfBuffer(html), filename: `borc-alacak-${exportFileDate()}.pdf` };
 }
 
 export async function buildSubscriptionsPdf(
   tenantId: string
 ): Promise<{ buffer: Buffer; filename: string }> {
-  const [records, { tenantName }] = await Promise.all([
+  const [records, company] = await Promise.all([
     prisma.subscriptionRecord.findMany({ where: { tenantId }, orderBy: [{ sonrakiYenilemeTarihi: "asc" }] }),
-    getTenantExportMeta(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
-  const html = buildSubscriptionsProfessionalPdfHtml({ records, tenantName });
+  const html = buildSubscriptionsProfessionalPdfHtml({ records, company });
   return { buffer: await htmlToPdfBuffer(html), filename: `abonelikler-${exportFileDate()}.pdf` };
 }
 
@@ -105,29 +106,31 @@ export async function buildReportsPdf(
     startDate: query.startDate,
     endDate: query.endDate,
   });
-  const [summary, { tenantName }] = await Promise.all([
+  const [summary, company] = await Promise.all([
     getReportSummary(tenantId, parsed),
-    getTenantExportMeta(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
-  const html = buildReportsPdfHtml(summary, tenantName);
+  const html = buildReportsPdfHtml(summary, company);
   return { buffer: await htmlToPdfBuffer(html), filename: `raporlar-${exportFileDate()}.pdf` };
 }
 
 export async function buildCapitalPdf(tenantId: string): Promise<{ buffer: Buffer; filename: string }> {
-  const [settings, summary, increases, partners, transactions, { tenantName }] = await Promise.all([
+  const [settings, summary, increases, partners, transactions, accounts, company] = await Promise.all([
     getCapitalSettings(tenantId),
     getCapitalSummary(tenantId),
     listCapitalIncreases(tenantId),
     listCapitalPartners(tenantId),
     listPartnerCapitalTransactions(tenantId),
-    getTenantExportMeta(tenantId),
+    listCompanyAccounts(tenantId),
+    getExportCompanyInfo(tenantId),
   ]);
 
   const html = buildCapitalPdfHtml({
-    tenantName,
+    company,
     settings: {
       sirketUnvani: settings.sirketUnvani,
       kurulusTarihi: settings.kurulusTarihi,
+      ticaretSicilGazeteTarihi: settings.ticaretSicilGazeteTarihi,
       anaSermaye: settings.anaSermaye,
       ortakParaCarpani: settings.ortakParaCarpani,
       uyariOrani: settings.uyariOrani,
@@ -135,16 +138,19 @@ export async function buildCapitalPdf(tenantId: string): Promise<{ buffer: Buffe
     },
     summary,
     partners,
+    accounts: accounts.map((a) => ({
+      hesapAdi: a.hesapAdi,
+      hesapTuru: a.hesapTuru,
+      bankaAdi: a.bankaAdi,
+      iban: a.iban,
+      aktifMi: a.aktifMi,
+    })),
     increases,
     transactions: transactions.map((t) => ({
       tarih: t.tarih,
       ortakAdi: t.ortakAdi,
       tur: t.tur,
-      hesap: t.companyAccount
-        ? t.companyAccount.bankaAdi
-          ? `${t.companyAccount.bankaAdi} - ${t.companyAccount.hesapAdi}`
-          : t.companyAccount.hesapAdi
-        : null,
+      hesap: t.companyAccount?.hesapAdi ?? null,
       aciklama: t.aciklama,
       tutar: t.tutar,
     })),

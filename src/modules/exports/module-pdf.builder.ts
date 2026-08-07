@@ -8,262 +8,235 @@ import {
   INCOME_STATUS_LABELS,
   SUBSCRIPTION_STATUS_LABELS,
 } from "./export-labels";
+import { countWhere, sumAmount, sumWhere } from "./export-analytics";
+import { formatExportDate } from "./format.utils";
 import {
-  averageAmount,
-  countWhere,
-  groupBySum,
-  maxAmount,
-  sumAmount,
-  sumWhere,
-  truncateText,
-} from "./export-analytics";
-import { formatExportCurrency, formatExportDate, formatExportPercent } from "./format.utils";
-import { formatExcelText } from "./excel.styles";
-import { buildProfessionalModulePdfHtml } from "./pdf-html.builder";
+  buildCompanyInfoSection,
+  buildDataTable,
+  buildLetterhead,
+  buildSectionTitle,
+  buildSummaryTable,
+  buildTotalsBox,
+  moneyCell,
+  wrapOfficialPdf,
+} from "./official-pdf.builder";
+import type { ExportCompanyInfo } from "./tenant-meta";
+import {
+  EXPENSE_DETAIL_COLUMNS,
+  INCOME_DETAIL_COLUMNS,
+  safeCellText,
+  type PdfTableColumn,
+} from "./pdf-table.builder";
 
-function analysisToPdfRows(rows: ReturnType<typeof groupBySum>) {
-  return rows.map((r) => [
-    r.label,
-    formatExportCurrency(r.total),
-    String(r.count),
-    formatExportPercent(r.ratio),
-  ]);
+function buildOfficialModulePdf(options: {
+  documentTitle: string;
+  reportTitle: string;
+  company: ExportCompanyInfo;
+  periodLabel?: string;
+  summaryRows: Array<[string, string]>;
+  detailTitle: string;
+  detailColumns?: PdfTableColumn[];
+  detailHeaders?: string[];
+  detailRows: string[][];
+  detailMoneyCols?: number[];
+  totals: Array<[string, string]>;
+}): string {
+  const detail = options.detailColumns
+    ? buildDataTable(options.detailTitle, [], options.detailRows, { columns: options.detailColumns })
+    : buildDataTable(options.detailTitle, options.detailHeaders ?? [], options.detailRows, {
+        moneyCols: options.detailMoneyCols,
+      });
+
+  const body = `
+    ${buildLetterhead(options.company, options.reportTitle, options.periodLabel)}
+    ${buildCompanyInfoSection(options.company)}
+    ${buildSummaryTable(options.summaryRows)}
+    ${detail}
+    ${buildSectionTitle("SONUÇ")}
+    ${buildTotalsBox(options.totals)}
+  `;
+
+  return wrapOfficialPdf(options.documentTitle, body);
 }
 
 export function buildExpensesProfessionalPdfHtml(options: {
   records: ExpenseRecord[];
-  tenantName: string;
+  company: ExportCompanyInfo;
   periodLabel?: string;
 }): string {
-  const { records, tenantName, periodLabel } = options;
+  const { records, company, periodLabel } = options;
   const total = sumAmount(records, (r) => Number(r.tutar));
   const paid = sumWhere(records, (r) => r.odemeDurumu === "ODENDI", (r) => Number(r.tutar));
   const pending = sumWhere(records, (r) => r.odemeDurumu === "BEKLIYOR", (r) => Number(r.tutar));
-  const avg = averageAmount(records, (r) => Number(r.tutar));
-  const max = maxAmount(records, (r) => Number(r.tutar));
+  const fisVar = countWhere(records, (r) => r.fisFaturaVarMi);
+  const fisYok = records.length - fisVar;
 
-  return buildProfessionalModulePdfHtml({
-    title: "Giderler Raporu",
-    tenantName,
+  return buildOfficialModulePdf({
+    documentTitle: "Giderler Raporu",
+    reportTitle: "GİDERLER RAPORU",
+    company,
     periodLabel,
-    recordCount: records.length,
-    summaryCards: [
-      { label: "Toplam Gider", value: formatExportCurrency(total), negative: true },
-      { label: "Ödenen Gider", value: formatExportCurrency(paid), positive: true },
-      { label: "Bekleyen Gider", value: formatExportCurrency(pending) },
-      { label: "Kayıt Sayısı", value: String(records.length) },
-      { label: "En Yüksek Gider", value: formatExportCurrency(max) },
-      { label: "Ortalama Gider", value: formatExportCurrency(avg) },
+    summaryRows: [
+      ["Toplam Gider", moneyCell(total)],
+      ["Ödenen Gider", moneyCell(paid)],
+      ["Bekleyen Gider", moneyCell(pending)],
+      ["Fiş/Fatura Var", String(fisVar)],
+      ["Fiş/Fatura Yok", String(fisYok)],
+      ["Kayıt Sayısı", String(records.length)],
     ],
-    analysisSections: [
-      {
-        title: "Kategori Özeti",
-        headers: ["Kategori", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(groupBySum(records, (r) => r.kategori, (r) => Number(r.tutar))),
-        moneyColumns: [1],
-      },
-      {
-        title: "Ödeme Durumu Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(
-            records,
-            (r) => EXPENSE_STATUS_LABELS[r.odemeDurumu] ?? r.odemeDurumu,
-            (r) => Number(r.tutar)
-          )
-        ),
-        moneyColumns: [1],
-      },
-      {
-        title: "Fiş / Fatura Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(records, (r) => (r.fisFaturaVarMi ? "Var" : "Yok"), (r) => Number(r.tutar))
-        ),
-        moneyColumns: [1],
-      },
-    ],
-    detailTitle: "Detay Gider Listesi",
-    detailHeaders: ["Tarih", "Kategori", "Firma", "Açıklama", "Tutar", "Ödeme Durumu"],
+    detailTitle: "GİDER DETAYLARI",
+    detailColumns: EXPENSE_DETAIL_COLUMNS,
     detailRows: records.map((r) => [
-      formatExportDate(r.tarih),
-      formatExcelText(r.kategori),
-      formatExcelText(r.firmaTedarikci),
-      truncateText(r.aciklama, 50),
-      formatExportCurrency(Number(r.tutar)),
-      EXPENSE_STATUS_LABELS[r.odemeDurumu] ?? r.odemeDurumu,
+      safeCellText(formatExportDate(r.tarih)),
+      safeCellText(r.kategori),
+      safeCellText(r.firmaTedarikci),
+      safeCellText(r.aciklama),
+      moneyCell(Number(r.tutar)),
+      safeCellText(EXPENSE_STATUS_LABELS[r.odemeDurumu] ?? r.odemeDurumu),
+      safeCellText(r.fisFaturaVarMi ? "Var" : "Yok"),
     ]),
-    detailMoneyColumns: [4],
+    totals: [
+      ["Toplam Gider", moneyCell(total)],
+      ["Bekleyen Gider", moneyCell(pending)],
+      ["Ödenen Gider", moneyCell(paid)],
+    ],
   });
 }
 
 export function buildIncomesProfessionalPdfHtml(options: {
   records: IncomeRecord[];
-  tenantName: string;
+  company: ExportCompanyInfo;
   periodLabel?: string;
 }): string {
-  const { records, tenantName, periodLabel } = options;
+  const { records, company, periodLabel } = options;
   const total = sumAmount(records, (r) => Number(r.tutar));
   const collected = sumWhere(records, (r) => r.tahsilDurumu === "TAHSIL_EDILDI", (r) => Number(r.tutar));
   const pending = sumWhere(records, (r) => r.tahsilDurumu === "BEKLIYOR", (r) => Number(r.tutar));
-  const avg = averageAmount(records, (r) => Number(r.tutar));
-  const max = maxAmount(records, (r) => Number(r.tutar));
+  const invoiced = countWhere(records, (r) => r.faturaKesildiMi);
+  const notInvoiced = records.length - invoiced;
 
-  return buildProfessionalModulePdfHtml({
-    title: "Gelirler Raporu",
-    tenantName,
+  return buildOfficialModulePdf({
+    documentTitle: "Gelirler Raporu",
+    reportTitle: "GELİRLER RAPORU",
+    company,
     periodLabel,
-    recordCount: records.length,
-    summaryCards: [
-      { label: "Toplam Gelir", value: formatExportCurrency(total), positive: true },
-      { label: "Tahsil Edilen", value: formatExportCurrency(collected), positive: true },
-      { label: "Bekleyen Tahsilat", value: formatExportCurrency(pending) },
-      { label: "Kayıt Sayısı", value: String(records.length) },
-      { label: "En Yüksek Gelir", value: formatExportCurrency(max) },
-      { label: "Ortalama Gelir", value: formatExportCurrency(avg) },
+    summaryRows: [
+      ["Toplam Gelir", moneyCell(total)],
+      ["Tahsil Edilen", moneyCell(collected)],
+      ["Bekleyen Tahsilat", moneyCell(pending)],
+      ["Fatura Kesilen", String(invoiced)],
+      ["Fatura Kesilmeyen", String(notInvoiced)],
+      ["Kayıt Sayısı", String(records.length)],
     ],
-    analysisSections: [
-      {
-        title: "Satış Türü Özeti",
-        headers: ["Satış Türü", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(
-            records,
-            (r) => (r.satisTuru ? INCOME_SALE_TYPE_LABELS[r.satisTuru] ?? r.satisTuru : "Belirtilmemiş"),
-            (r) => Number(r.tutar)
-          )
-        ),
-        moneyColumns: [1],
-      },
-      {
-        title: "Tahsil Durumu Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(
-            records,
-            (r) => INCOME_STATUS_LABELS[r.tahsilDurumu] ?? r.tahsilDurumu,
-            (r) => Number(r.tutar)
-          )
-        ),
-        moneyColumns: [1],
-      },
-      {
-        title: "Fatura Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(records, (r) => (r.faturaKesildiMi ? "Kesildi" : "Kesilmedi"), (r) => Number(r.tutar))
-        ),
-        moneyColumns: [1],
-      },
-    ],
-    detailTitle: "Detay Gelir Listesi",
-    detailHeaders: ["Tarih", "Ürün/Hizmet", "Müşteri", "Satış Türü", "Tutar", "Tahsil"],
+    detailTitle: "GELİR DETAYLARI",
+    detailColumns: INCOME_DETAIL_COLUMNS,
     detailRows: records.map((r) => [
-      formatExportDate(r.tarih),
-      formatExcelText(r.urunHizmet ?? r.projeMarka),
-      formatExcelText(r.musteri),
-      r.satisTuru ? INCOME_SALE_TYPE_LABELS[r.satisTuru] ?? r.satisTuru : "—",
-      formatExportCurrency(Number(r.tutar)),
-      INCOME_STATUS_LABELS[r.tahsilDurumu] ?? r.tahsilDurumu,
+      safeCellText(formatExportDate(r.tarih)),
+      safeCellText(r.urunHizmet ?? r.projeMarka),
+      safeCellText(r.musteri),
+      safeCellText(r.satisTuru ? INCOME_SALE_TYPE_LABELS[r.satisTuru] ?? r.satisTuru : null),
+      safeCellText(r.donemPaket),
+      moneyCell(Number(r.tutar)),
+      safeCellText(INCOME_STATUS_LABELS[r.tahsilDurumu] ?? r.tahsilDurumu),
+      safeCellText(r.faturaKesildiMi ? "Kesildi" : "Kesilmedi"),
     ]),
-    detailMoneyColumns: [4],
+    totals: [
+      ["Toplam Gelir", moneyCell(total)],
+      ["Bekleyen Tahsilat", moneyCell(pending)],
+      ["Tahsil Edilen", moneyCell(collected)],
+    ],
   });
 }
 
 export function buildDebtsProfessionalPdfHtml(options: {
   records: DebtRecord[];
-  tenantName: string;
+  company: ExportCompanyInfo;
 }): string {
-  const { records, tenantName } = options;
+  const { records, company } = options;
   const openDebt = sumWhere(records, (r) => r.tur === "BORC" && r.durum === "ACIK", (r) => Number(r.tutar));
   const openCredit = sumWhere(records, (r) => r.tur === "ALACAK" && r.durum === "ACIK", (r) => Number(r.tutar));
+  const closed = countWhere(records, (r) => r.durum === "KAPANDI");
+  const cancelled = countWhere(records, (r) => r.durum === "IPTAL");
+  const upcoming = countWhere(records, (r) => {
+    if (r.durum !== "ACIK" || !r.vadeTarihi) return false;
+    const vade = new Date(r.vadeTarihi);
+    const limit = new Date();
+    limit.setDate(limit.getDate() + 30);
+    return vade <= limit;
+  });
 
-  return buildProfessionalModulePdfHtml({
-    title: "Borç / Alacak Raporu",
-    tenantName,
-    recordCount: records.length,
-    summaryCards: [
-      { label: "Açık Borç", value: formatExportCurrency(openDebt), negative: true },
-      { label: "Açık Alacak", value: formatExportCurrency(openCredit), positive: true },
-      { label: "Net Durum", value: formatExportCurrency(openCredit - openDebt), positive: openCredit >= openDebt, negative: openCredit < openDebt },
-      { label: "Kayıt Sayısı", value: String(records.length) },
+  return buildOfficialModulePdf({
+    documentTitle: "Borç / Alacak Raporu",
+    reportTitle: "BORÇ / ALACAK RAPORU",
+    company,
+    summaryRows: [
+      ["Açık Borç", moneyCell(openDebt)],
+      ["Açık Alacak", moneyCell(openCredit)],
+      ["Net Durum", moneyCell(openCredit - openDebt)],
+      ["Yaklaşan Vade", String(upcoming)],
+      ["Kapalı Kayıt", String(closed)],
+      ["İptal Kayıt", String(cancelled)],
     ],
-    analysisSections: [
-      {
-        title: "Tür Özeti",
-        headers: ["Tür", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(groupBySum(records, (r) => DEBT_TYPE_LABELS[r.tur] ?? r.tur, (r) => Number(r.tutar))),
-        moneyColumns: [1],
-      },
-      {
-        title: "Durum Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(records, (r) => DEBT_STATUS_LABELS[r.durum] ?? r.durum, (r) => Number(r.tutar))
-        ),
-        moneyColumns: [1],
-      },
-    ],
-    detailTitle: "Detay Borç / Alacak Listesi",
-    detailHeaders: ["Vade", "Kişi/Firma", "Tür", "Tutar", "Durum"],
+    detailTitle: "BORÇ / ALACAK DETAYLARI",
+    detailHeaders: ["Tür", "Kişi / Firma", "Açıklama", "Vade", "Tutar", "Durum"],
     detailRows: records.map((r) => [
-      formatExportDate(r.vadeTarihi),
-      formatExcelText(r.kisiFirma),
-      DEBT_TYPE_LABELS[r.tur] ?? r.tur,
-      formatExportCurrency(Number(r.tutar)),
-      DEBT_STATUS_LABELS[r.durum] ?? r.durum,
+      safeCellText(DEBT_TYPE_LABELS[r.tur] ?? r.tur),
+      safeCellText(r.kisiFirma),
+      safeCellText(r.aciklama),
+      safeCellText(formatExportDate(r.vadeTarihi)),
+      moneyCell(Number(r.tutar)),
+      safeCellText(DEBT_STATUS_LABELS[r.durum] ?? r.durum),
     ]),
-    detailMoneyColumns: [3],
+    detailMoneyCols: [4],
+    totals: [["Net Borç / Alacak Durumu", moneyCell(openCredit - openDebt)]],
   });
 }
 
 export function buildSubscriptionsProfessionalPdfHtml(options: {
   records: SubscriptionRecord[];
-  tenantName: string;
+  company: ExportCompanyInfo;
 }): string {
-  const { records, tenantName } = options;
+  const { records, company } = options;
   const active = countWhere(records, (r) => r.durum === "AKTIF");
   const monthly = sumWhere(records, (r) => r.faturaDonemi === "AYLIK" && r.durum === "AKTIF", (r) => Number(r.tutar));
   const yearly = sumWhere(records, (r) => r.faturaDonemi === "YILLIK" && r.durum === "AKTIF", (r) => Number(r.tutar));
+  const paused = countWhere(records, (r) => r.durum === "DURAKLATILDI");
+  const cancelled = countWhere(records, (r) => r.durum === "IPTAL");
+  const upcoming = countWhere(records, (r) => {
+    if (r.durum !== "AKTIF" || !r.sonrakiYenilemeTarihi) return false;
+    const renew = new Date(r.sonrakiYenilemeTarihi);
+    const limit = new Date();
+    limit.setDate(limit.getDate() + 30);
+    return renew <= limit;
+  });
 
-  return buildProfessionalModulePdfHtml({
-    title: "Abonelikler Raporu",
-    tenantName,
-    recordCount: records.length,
-    summaryCards: [
-      { label: "Aktif Abonelik", value: String(active) },
-      { label: "Aylık Toplam", value: formatExportCurrency(monthly) },
-      { label: "Yıllık Toplam", value: formatExportCurrency(yearly) },
-      { label: "Kayıt Sayısı", value: String(records.length) },
+  return buildOfficialModulePdf({
+    documentTitle: "Abonelikler Raporu",
+    reportTitle: "ABONELİKLER RAPORU",
+    company,
+    summaryRows: [
+      ["Aktif Abonelik", String(active)],
+      ["Aylık Toplam", moneyCell(monthly)],
+      ["Yıllık Toplam", moneyCell(yearly)],
+      ["Yaklaşan Yenileme", String(upcoming)],
+      ["Duraklatılan", String(paused)],
+      ["İptal", String(cancelled)],
     ],
-    analysisSections: [
-      {
-        title: "Fatura Dönemi Özeti",
-        headers: ["Dönem", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(records, (r) => BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi, (r) => Number(r.tutar))
-        ),
-        moneyColumns: [1],
-      },
-      {
-        title: "Durum Özeti",
-        headers: ["Durum", "Toplam", "Kayıt", "Oran"],
-        rows: analysisToPdfRows(
-          groupBySum(records, (r) => SUBSCRIPTION_STATUS_LABELS[r.durum] ?? r.durum, (r) => Number(r.tutar))
-        ),
-        moneyColumns: [1],
-      },
-    ],
-    detailTitle: "Detay Abonelik Listesi",
-    detailHeaders: ["Hizmet", "Kategori", "Dönem", "Tutar", "Yenileme", "Durum"],
+    detailTitle: "ABONELİK DETAYLARI",
+    detailHeaders: ["Hizmet", "Kategori", "Fatura Dönemi", "Tutar", "Sonraki Yenileme", "Durum", "Not"],
     detailRows: records.map((r) => [
-      formatExcelText(r.hizmetAdi),
-      formatExcelText(r.kategori),
-      BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi,
-      formatExportCurrency(Number(r.tutar)),
-      formatExportDate(r.sonrakiYenilemeTarihi),
-      SUBSCRIPTION_STATUS_LABELS[r.durum] ?? r.durum,
+      safeCellText(r.hizmetAdi),
+      safeCellText(r.kategori),
+      safeCellText(BILLING_LABELS[r.faturaDonemi] ?? r.faturaDonemi),
+      moneyCell(Number(r.tutar)),
+      safeCellText(formatExportDate(r.sonrakiYenilemeTarihi)),
+      safeCellText(SUBSCRIPTION_STATUS_LABELS[r.durum] ?? r.durum),
+      safeCellText(r.not),
     ]),
-    detailMoneyColumns: [3],
+    detailMoneyCols: [3],
+    totals: [
+      ["Aylık Toplam", moneyCell(monthly)],
+      ["Yıllık Toplam", moneyCell(yearly)],
+    ],
   });
 }

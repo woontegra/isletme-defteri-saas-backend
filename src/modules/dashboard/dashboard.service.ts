@@ -7,6 +7,7 @@ import {
   type ReportSummaryDto,
 } from "../reports/report.service";
 import { listPartnerCapitalTransactions } from "../capital/capital.service";
+import { TRANSACTION_TYPE_LABELS } from "../exports/export-labels";
 
 export type DashboardPeriod =
   | "THIS_MONTH"
@@ -29,13 +30,43 @@ export const dashboardQuerySchema = z.object({
   }),
 });
 
+export type DashboardActivityType =
+  | "GELIR"
+  | "GIDER"
+  | "BORC"
+  | "ALACAK"
+  | "ABONELIK"
+  | "SERMAYE";
+
 export type DashboardRecentItemDto = {
   id: string;
-  tip: "GELIR" | "GIDER" | "BORC_ALACAK" | "ABONELIK" | "SERMAYE";
+  tip: DashboardActivityType | "BORC_ALACAK";
   baslik: string;
   altBaslik: string | null;
   tutar: number;
   tarih: string;
+};
+
+export type DashboardActivityDto = {
+  id: string;
+  type: DashboardActivityType;
+  title: string;
+  subtitle: string | null;
+  date: string;
+  amount: number;
+  statusLabel: string | null;
+  targetPath: string;
+};
+
+export type DashboardUpcomingItemDto = {
+  id: string;
+  type: "BEKLEYEN_GIDER" | "BORC_VADESI" | "ALACAK_VADESI" | "ABONELIK_YENILEME" | "BEKLEYEN_TAHSILAT";
+  title: string;
+  subtitle: string | null;
+  dueDate: string | null;
+  amount: number;
+  statusLabel: string | null;
+  targetPath: string;
 };
 
 export type DashboardSummaryDto = {
@@ -50,6 +81,8 @@ export type DashboardSummaryDto = {
   sermaye: ReportSummaryDto["sermaye"];
   aylikTrend: ReportMonthlyTrendDto[];
   yaklasanlar: ReportPendingItemDto[];
+  recentActivities: DashboardActivityDto[];
+  upcomingItems: DashboardUpcomingItemDto[];
   sonHareketler: {
     gelirler: DashboardRecentItemDto[];
     giderler: DashboardRecentItemDto[];
@@ -103,6 +136,103 @@ function safeNumber(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function buildUpcomingItems(items: ReportPendingItemDto[]): DashboardUpcomingItemDto[] {
+  return items.map((item) => {
+    if (item.tip === "ODEME") {
+      return {
+        id: item.id,
+        type: "BEKLEYEN_GIDER" as const,
+        title: item.baslik,
+        subtitle: item.altBaslik,
+        dueDate: item.tarih,
+        amount: item.tutar,
+        statusLabel: item.durum,
+        targetPath: "/app/giderler",
+      };
+    }
+    if (item.tip === "BORC_ALACAK") {
+      const isAlacak = item.durum === "Alacak";
+      return {
+        id: item.id,
+        type: isAlacak ? ("ALACAK_VADESI" as const) : ("BORC_VADESI" as const),
+        title: item.baslik,
+        subtitle: item.altBaslik,
+        dueDate: item.tarih,
+        amount: item.tutar,
+        statusLabel: item.durum,
+        targetPath: "/app/borc-alacak",
+      };
+    }
+    if (item.tip === "ABONELIK") {
+      return {
+        id: item.id,
+        type: "ABONELIK_YENILEME" as const,
+        title: item.baslik,
+        subtitle: item.altBaslik,
+        dueDate: item.tarih,
+        amount: item.tutar,
+        statusLabel: item.durum,
+        targetPath: "/app/abonelikler",
+      };
+    }
+    return {
+      id: item.id,
+      type: "BEKLEYEN_TAHSILAT" as const,
+      title: item.baslik,
+      subtitle: item.altBaslik,
+      dueDate: item.tarih,
+      amount: item.tutar,
+      statusLabel: item.durum,
+      targetPath: "/app/gelirler",
+    };
+  });
+}
+
+const ACTIVITY_PATHS: Record<DashboardActivityType, string> = {
+  GELIR: "/app/gelirler",
+  GIDER: "/app/giderler",
+  BORC: "/app/borc-alacak",
+  ALACAK: "/app/borc-alacak",
+  ABONELIK: "/app/abonelikler",
+  SERMAYE: "/app/sermaye",
+};
+
+function toActivityDto(
+  item: DashboardRecentItemDto,
+  statusLabel: string | null = null
+): DashboardActivityDto {
+  const type: DashboardActivityType =
+    item.tip === "BORC_ALACAK" ? "BORC" : (item.tip as DashboardActivityType);
+  return {
+    id: item.id,
+    type,
+    title: item.baslik,
+    subtitle: item.altBaslik,
+    date: item.tarih,
+    amount: item.tutar,
+    statusLabel,
+    targetPath: ACTIVITY_PATHS[type],
+  };
+}
+
+function buildRecentActivities(groups: {
+  gelirler: DashboardRecentItemDto[];
+  giderler: DashboardRecentItemDto[];
+  borcAlacak: DashboardRecentItemDto[];
+  abonelikler: DashboardRecentItemDto[];
+  sermaye: DashboardRecentItemDto[];
+}): DashboardActivityDto[] {
+  return [
+    ...groups.gelirler.map((i) => toActivityDto(i)),
+    ...groups.giderler.map((i) => toActivityDto(i)),
+    ...groups.borcAlacak.map((i) => toActivityDto(i)),
+    ...groups.abonelikler.map((i) => toActivityDto(i)),
+    ...groups.sermaye.map((i) => toActivityDto(i)),
+  ]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 12);
+}
+
 function buildYaklasanlar(summary: ReportSummaryDto): ReportPendingItemDto[] {
   const items = [
     ...summary.bekleyenler.yaklasanBorcAlacak,
@@ -148,7 +278,7 @@ export async function getDashboardSummary(
           tutar: true,
         },
         orderBy: [{ tarih: "desc" }, { createdAt: "desc" }],
-        take: 5,
+        take: 6,
       }),
       prisma.expenseRecord.findMany({
         where: dateFilter ? { tenantId, tarih: dateFilter } : { tenantId },
@@ -161,7 +291,7 @@ export async function getDashboardSummary(
           tutar: true,
         },
         orderBy: [{ tarih: "desc" }, { createdAt: "desc" }],
-        take: 5,
+        take: 6,
       }),
       prisma.debtRecord.findMany({
         where: { tenantId },
@@ -175,7 +305,7 @@ export async function getDashboardSummary(
           createdAt: true,
         },
         orderBy: [{ vadeTarihi: "asc" }, { createdAt: "desc" }],
-        take: 5,
+        take: 6,
       }),
       prisma.subscriptionRecord.findMany({
         where: { tenantId, durum: "AKTIF" },
@@ -187,7 +317,7 @@ export async function getDashboardSummary(
           sonrakiYenilemeTarihi: true,
         },
         orderBy: { sonrakiYenilemeTarihi: "asc" },
-        take: 5,
+        take: 6,
       }),
       listPartnerCapitalTransactions(tenantId),
     ]);
@@ -198,21 +328,9 @@ export async function getDashboardSummary(
       const tarih = new Date(tx.tarih);
       return tarih >= dateFilter.gte && tarih <= dateFilter.lte;
     })
-    .slice(0, 5);
+    .slice(0, 6);
 
-  return {
-    period: {
-      type: parsed.period,
-      startDate: summary.period.startDate,
-      endDate: summary.period.endDate,
-    },
-    genel: summary.genel,
-    borcAlacak: summary.borcAlacak,
-    abonelik: summary.abonelik,
-    sermaye: summary.sermaye,
-    aylikTrend: summary.aylikTrend,
-    yaklasanlar: buildYaklasanlar(summary),
-    sonHareketler: {
+  const sonHareketler = {
       gelirler: recentIncomes.map((r) => ({
         id: r.id,
         tip: "GELIR" as const,
@@ -231,7 +349,7 @@ export async function getDashboardSummary(
       })),
       borcAlacak: recentDebts.map((r) => ({
         id: r.id,
-        tip: "BORC_ALACAK" as const,
+        tip: (r.tur === "ALACAK" ? "ALACAK" : "BORC") as DashboardActivityType,
         baslik: r.kisiFirma,
         altBaslik: r.projeMarka,
         tutar: safeNumber(Number(r.tutar)),
@@ -249,10 +367,28 @@ export async function getDashboardSummary(
         id: r.id,
         tip: "SERMAYE" as const,
         baslik: r.ortakAdi,
-        altBaslik: r.aciklama,
+        altBaslik: TRANSACTION_TYPE_LABELS[r.tur] ?? r.aciklama,
         tutar: safeNumber(r.tutar),
         tarih: r.tarih,
       })),
+    };
+
+  const yaklasanlar = buildYaklasanlar(summary);
+
+  return {
+    period: {
+      type: parsed.period,
+      startDate: summary.period.startDate,
+      endDate: summary.period.endDate,
     },
+    genel: summary.genel,
+    borcAlacak: summary.borcAlacak,
+    abonelik: summary.abonelik,
+    sermaye: summary.sermaye,
+    aylikTrend: summary.aylikTrend,
+    yaklasanlar,
+    recentActivities: buildRecentActivities(sonHareketler),
+    upcomingItems: buildUpcomingItems(yaklasanlar),
+    sonHareketler,
   };
 }
